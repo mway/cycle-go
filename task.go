@@ -57,7 +57,8 @@ var (
 	ErrStopHook = errors.New("stop hook error")
 )
 
-// A TaskFunc is a function that can be executed by a Task.
+// A TaskFunc is a function that can be executed by a Task. If a TaskFunc
+// returns an error, the Task will stop.
 type TaskFunc = func(context.Context) error
 
 // A Task is a periodic task executed on a predefined interval. Unlike simple
@@ -147,6 +148,8 @@ func (t *Task) IsRunning() bool {
 
 // Start starts the task. Start will return an error if any configured OnStart
 // hook returns an error, or if Start has previously been called.
+//
+// If the Task's TaskFunc returns an error, the Task will stop.
 func (t *Task) Start(ctx context.Context) error {
 	if !t.state.CAS(_stateInitialized, _stateRunning) {
 		return ErrTaskAlreadyStarted
