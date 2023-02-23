@@ -22,8 +22,6 @@ package cycle
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -31,6 +29,7 @@ import (
 	"go.mway.dev/chrono"
 	"go.mway.dev/chrono/clock"
 	"go.mway.dev/cycle/internal/rand"
+	"go.mway.dev/errors"
 	xmath "go.mway.dev/math"
 	"go.uber.org/atomic"
 	"go.uber.org/multierr"
@@ -72,20 +71,21 @@ type TaskFunc = func(context.Context) error
 // noise in each cycle, however they may also be configured to use jitter.
 // See TaskOptions for more information.
 type Task struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	clock     clock.Clock
-	body      TaskFunc
-	hooks     []TaskHook
-	name      string
-	state     atomic.Uint32
-	wg        sync.WaitGroup
-	rate      time.Duration
-	cycles    atomic.Uint64
-	err       error
-	errmu     sync.Mutex
-	jitterMin time.Duration
-	jitterMax time.Duration
+	ctx           context.Context
+	cancel        context.CancelFunc
+	clock         clock.Clock
+	body          TaskFunc
+	hooks         []TaskHook
+	name          string
+	state         atomic.Uint32
+	wg            sync.WaitGroup
+	rate          time.Duration
+	cycles        atomic.Uint64
+	err           error
+	errmu         sync.Mutex
+	jitterMin     time.Duration
+	jitterMax     time.Duration
+	hooksExecuted int
 }
 
 // NewTask creates a new Task based on the given options.
@@ -151,7 +151,7 @@ func (t *Task) IsRunning() bool {
 //
 // If the Task's TaskFunc returns an error, the Task will stop.
 func (t *Task) Start(ctx context.Context) error {
-	if !t.state.CAS(_stateInitialized, _stateRunning) {
+	if !t.state.CompareAndSwap(_stateInitialized, _stateRunning) {
 		return ErrTaskAlreadyStarted
 	}
 
@@ -172,7 +172,7 @@ func (t *Task) Start(ctx context.Context) error {
 // returns an error, or if Stop has previously been called. Note that the Task
 // will still be stopped even if the OnStop hooks error.
 func (t *Task) Stop(ctx context.Context) error {
-	if !t.state.CAS(_stateRunning, _stateStopped) {
+	if !t.state.CompareAndSwap(_stateRunning, _stateStopped) {
 		return ErrTaskNotRunning
 	}
 
@@ -200,7 +200,7 @@ func (t *Task) run() {
 
 		if !timer.Stop() {
 			select {
-			case <-timer.C():
+			case <-timer.C:
 			default:
 			}
 		}
@@ -219,7 +219,7 @@ func (t *Task) run() {
 		timer.Reset(xmath.Max(0, t.rate-elapsed))
 
 		select {
-		case <-timer.C():
+		case <-timer.C:
 			if elapsed, err = t.runBody(elapsed); err != nil {
 				t.storeError(err)
 				return
@@ -238,7 +238,7 @@ func (t *Task) runBody(
 	defer func() {
 		elapsed = time.Duration(chrono.Nanotime() - start)
 		if r := recover(); r != nil {
-			err = multierr.Combine(err, fmt.Errorf("panic: %v", r))
+			err = multierr.Combine(err, errors.Newf("panic: %v", r))
 		}
 	}()
 
@@ -254,30 +254,42 @@ func (t *Task) runStartHooks(ctx context.Context) error {
 	for _, hook := range t.hooks {
 		if hook.OnStart != nil {
 			if err := hook.OnStart(ctx); err != nil {
-				return multierr.Append(ErrStartHook, err)
+				return multierr.Combine(
+					ErrStartHook,
+					err,
+					t.runStopHooks(ctx),
+				)
 			}
 		}
+		t.hooksExecuted++
 	}
 
 	err := ctx.Err()
 	if err != nil {
 		err = multierr.Append(ErrStartHook, err)
 	}
+
 	return err
 }
 
 func (t *Task) runStopHooks(ctx context.Context) error {
 	var err error
-	for i := len(t.hooks) - 1; i >= 0; i-- {
+	for i := t.hooksExecuted - 1; i >= 0; i-- {
 		hook := t.hooks[i]
 		if hook.OnStop != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
 			err = multierr.Append(err, hook.OnStop(ctx))
 		}
 	}
 
 	err = multierr.Append(err, ctx.Err())
 	if err != nil {
-		err = multierr.Combine(ErrStopHook, err)
+		err = multierr.Append(ErrStopHook, err)
 	}
 
 	return err

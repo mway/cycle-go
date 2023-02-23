@@ -140,7 +140,7 @@ func TestTaskOnStartContextError(t *testing.T) {
 
 		// OnStart hooks bail early if there's an error, so the context error is
 		// not checked in those cases.
-		require.False(t, errors.Is(task.Start(ctx), context.Canceled))
+		require.ErrorIs(t, task.Start(ctx), context.Canceled)
 	})
 
 	t.Run("without hook error", func(t *testing.T) {
@@ -168,9 +168,7 @@ func TestTaskOnStopHookError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := task.Stop(ctx)
-	require.ErrorIs(t, err, hookErr)
-	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, task.Stop(ctx), context.Canceled)
 }
 
 func TestTaskHooks(t *testing.T) {
@@ -205,6 +203,46 @@ func TestTaskHooks(t *testing.T) {
 
 	require.Equal(t, expectStart, actualStart)
 	require.Equal(t, expectStop, actualStop)
+}
+
+func TestTaskHooks_OnlyStopIfStarted(t *testing.T) {
+	var (
+		err     = errors.New("start failed")
+		stops   int
+		task, _ = newTask(
+			t,
+			cycle.WithHooks(
+				cycle.TaskHook{
+					OnStart: cycle.FuncToTask(func() {
+						// nop
+					}),
+					OnStop: cycle.FuncToTask(func() {
+						stops++
+					}),
+				},
+				cycle.TaskHook{
+					OnStart: nil,
+					OnStop: cycle.FuncToTask(func() {
+						stops++
+					}),
+				},
+				cycle.TaskHook{
+					OnStart: func(context.Context) error {
+						return err
+					},
+					OnStop: cycle.FuncToTask(func() {
+						require.FailNow(
+							t,
+							"called stop hook without successful start hook",
+						)
+					}),
+				},
+			),
+		)
+	)
+
+	require.ErrorIs(t, task.Start(context.Background()), err)
+	require.Equal(t, 2, stops)
 }
 
 func TestTaskFuncInitialError(t *testing.T) {

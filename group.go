@@ -91,7 +91,7 @@ func (g *Group) Add(opts ...TaskOption) error {
 // Start starts all tasks in the Group. Once called, additional tasks added via
 // Add will be started immediately.
 func (g *Group) Start(ctx context.Context) error {
-	if !g.state.CAS(_stateInitialized, _stateRunning) {
+	if !g.state.CompareAndSwap(_stateInitialized, _stateRunning) {
 		return ErrGroupAlreadyStarted
 	}
 
@@ -100,7 +100,7 @@ func (g *Group) Start(ctx context.Context) error {
 
 // Stop stops all tasks in the Group.
 func (g *Group) Stop(ctx context.Context) error {
-	if !g.state.CAS(_stateRunning, _stateStopped) {
+	if !g.state.CompareAndSwap(_stateRunning, _stateStopped) {
 		return ErrGroupNotRunning
 	}
 

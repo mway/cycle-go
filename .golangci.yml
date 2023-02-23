@@ -12,11 +12,11 @@ output:
 
 linters:
   enable:
-    - deadcode
     - dogsled
     - errcheck
     - goconst
     - gocyclo
+    - gofumpt
     - goimports
     - gosimple
     - govet
@@ -25,12 +25,10 @@ linters:
     - misspell
     - revive
     - staticcheck
-    - structcheck
     - typecheck
     - unconvert
     - unparam
     - unused
-    - varcheck
 
 linters-settings:
   dogsled:
